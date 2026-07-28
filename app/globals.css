@@ -644,6 +644,10 @@ input[type="range"]::-webkit-slider-thumb {
   cursor: pointer;
 }
 
+.default-sound > svg {
+  color: #559c51;
+}
+
 .sound-wave {
   height: 14px;
   display: flex;

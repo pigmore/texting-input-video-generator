@@ -112,6 +112,31 @@ const INTRO_MS = 700;
 const OUTRO_MS = 1_200;
 const FPS = 30;
 const AUDIO_SAMPLE_RATE = 48_000;
+const DEFAULT_CLICK_URL = "/asset/soundEffect/click.mp3";
+
+function audioBufferToClick(
+  decoded: AudioBuffer,
+  name: string,
+): CustomClick {
+  const sampleCount = Math.min(
+    decoded.length,
+    Math.floor(decoded.sampleRate),
+  );
+  const monoSamples = new Float32Array(sampleCount);
+
+  for (let channel = 0; channel < decoded.numberOfChannels; channel += 1) {
+    const channelData = decoded.getChannelData(channel);
+    for (let index = 0; index < sampleCount; index += 1) {
+      monoSamples[index] += channelData[index] / decoded.numberOfChannels;
+    }
+  }
+
+  return {
+    name,
+    samples: monoSamples,
+    sampleRate: decoded.sampleRate,
+  };
+}
 
 function seededRandom(seed: number) {
   let state = seed >>> 0;
@@ -787,6 +812,10 @@ export default function Home() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const lastSoundIndexRef = useRef(0);
   const customClickRef = useRef<CustomClick | null>(null);
+  const defaultClickRef = useRef<CustomClick | null>(null);
+  const defaultClickPromiseRef = useRef<Promise<CustomClick | null> | null>(
+    null,
+  );
 
   const [text, setText] = useState(
     "The smallest idea can become something unforgettable.",
@@ -830,6 +859,34 @@ export default function Home() {
     [sceneOptions, typingTimeline],
   );
 
+  const loadDefaultClick = useCallback(async () => {
+    if (defaultClickRef.current) return defaultClickRef.current;
+
+    defaultClickPromiseRef.current ??= (async () => {
+      try {
+        const response = await fetch(DEFAULT_CLICK_URL);
+        if (!response.ok) return null;
+        const decodeContext = new AudioContext();
+        try {
+          const decoded = await decodeContext.decodeAudioData(
+            await response.arrayBuffer(),
+          );
+          return audioBufferToClick(decoded, "click.mp3");
+        } finally {
+          if (decodeContext.state !== "closed") {
+            await decodeContext.close().catch(() => undefined);
+          }
+        }
+      } catch {
+        return null;
+      }
+    })();
+
+    const click = await defaultClickPromiseRef.current;
+    defaultClickRef.current = click;
+    return click;
+  }, []);
+
   const playKeyClick = useCallback(
     (keyIndex: number) => {
       const audioContext = audioContextRef.current;
@@ -837,7 +894,8 @@ export default function Home() {
 
       const character = text[keyIndex] ?? "";
       const keyLevel = character === " " ? 0.5 : /[,.!?;:]/.test(character) ? 0.76 : 1;
-      const customClick = customClickRef.current;
+      const customClick =
+        customClickRef.current ?? defaultClickRef.current;
       const source = audioContext.createBufferSource();
 
       if (customClick) {
@@ -889,6 +947,10 @@ export default function Home() {
     },
     [keySound, keySoundLevel, text],
   );
+
+  useEffect(() => {
+    void loadDefaultClick();
+  }, [loadDefaultClick]);
 
   useEffect(() => {
     paint(Math.min(elapsed, duration));
@@ -963,6 +1025,7 @@ export default function Home() {
       if (audioContextRef.current.state === "suspended") {
         await audioContextRef.current.resume();
       }
+      await loadDefaultClick();
     }
     lastSoundIndexRef.current = typedCountAt(typingTimeline, startFrom);
     elapsedBeforePlayRef.current = startFrom;
@@ -1007,25 +1070,7 @@ export default function Home() {
       const decoded = await audioContextRef.current.decodeAudioData(
         await file.arrayBuffer(),
       );
-      const sampleCount = Math.min(
-        decoded.length,
-        Math.floor(decoded.sampleRate),
-      );
-      const monoSamples = new Float32Array(sampleCount);
-
-      for (let channel = 0; channel < decoded.numberOfChannels; channel += 1) {
-        const channelData = decoded.getChannelData(channel);
-        for (let index = 0; index < sampleCount; index += 1) {
-          monoSamples[index] +=
-            channelData[index] / decoded.numberOfChannels;
-        }
-      }
-
-      customClickRef.current = {
-        name: file.name,
-        samples: monoSamples,
-        sampleRate: decoded.sampleRate,
-      };
+      customClickRef.current = audioBufferToClick(decoded, file.name);
       setCustomClickName(file.name);
       setKeySound(true);
       resetPlayback();
@@ -1041,7 +1086,7 @@ export default function Home() {
     customClickRef.current = null;
     setCustomClickName("");
     resetPlayback();
-    setNotice("Using the built-in keyboard click.");
+    setNotice("Using the default click.mp3 sound.");
   };
 
   const exportMp4 = async () => {
@@ -1060,6 +1105,9 @@ export default function Home() {
       const exportCanvas = document.createElement("canvas");
       exportCanvas.width = aspectInfo.width;
       exportCanvas.height = aspectInfo.height;
+      const activeClick = keySound
+        ? customClickRef.current ?? (await loadDefaultClick())
+        : null;
       const audioConfig: AudioEncoderConfig = {
         codec: "mp4a.40.2",
         sampleRate: AUDIO_SAMPLE_RATE,
@@ -1151,7 +1199,7 @@ export default function Home() {
           typingTimeline,
           duration,
           keySoundLevel / 100,
-          customClickRef.current,
+          activeClick,
         );
         let audioEncoderError: Error | null = null;
         const audioEncoder = new AudioEncoder({
@@ -1507,7 +1555,18 @@ export default function Home() {
                     <X size={12} />
                   </button>
                 </div>
-              ) : null}
+              ) : (
+                <div className="custom-sound default-sound">
+                  <span className="sound-wave" aria-hidden="true">
+                    <i />
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                  <span title="Default sound effect">Default · click.mp3</span>
+                  <Check size={12} aria-hidden="true" />
+                </div>
+              )}
             </div>
           </section>
         </aside>
